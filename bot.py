@@ -127,7 +127,7 @@ def format_event(event):
     date_str = event.get('date', 'Unknown Date')
     try:
         dt = datetime.fromisoformat(date_str)
-        date_display = dt.strftime("%Y-%m-%d %H:%M")
+        date_display = dt.strftime("%H:%M %d.%m.%Y")
     except ValueError:
         date_display = date_str
 
