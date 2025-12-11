@@ -61,12 +61,44 @@ TOPICS = [
     "Fed Interest Rate Decision"
 ]
 
+# Global Cache
+CACHE_DURATION = 3600  # 1 hour in seconds
+last_fetch_time = 0
+cached_data = []
+
 def fetch_events():
-    """Fetch events from the JSON endpoint."""
+    """Fetch events from the JSON endpoint with caching and error handling."""
+    global last_fetch_time, cached_data
+    
+    now = datetime.now().timestamp()
+    
+    # Check cache
+    if cached_data and (now - last_fetch_time < CACHE_DURATION):
+        logger.info(f"Using cached data. Next fetch allowed in {int(CACHE_DURATION - (now - last_fetch_time))} seconds.")
+        return cached_data
+
     try:
+        logger.info("Fetching new data from API...")
         response = requests.get(URL, timeout=10)
         response.raise_for_status()
-        return response.json()
+        
+        # Try parsing JSON
+        data = response.json()
+        
+        # Update cache on success
+        cached_data = data
+        last_fetch_time = now
+        logger.info(f"Cache updated. Total events: {len(data)}")
+        
+        return data
+
+    except json.JSONDecodeError:
+        logger.error("Failed to parse JSON. Likely rate limited.")
+        logger.error(f"Response content: {response.text[:200]}...") # Log first 200 chars
+        return [] # Return empty list, don't crash. 
+        # Ideally we could return cached_data even if expired if we have it? 
+        # For now, safe default is empty to avoid reporting garbage.
+        
     except Exception as e:
         logger.error(f"Error fetching events: {e}")
         return []
