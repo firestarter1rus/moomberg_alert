@@ -258,6 +258,26 @@ def main():
     application.add_handler(CommandHandler("check", check_command))
 
     logger.info("Bot is polling...")
+    
+    # Start dummy web server for Render
+    from flask import Flask
+    from threading import Thread
+
+    app = Flask(__name__)
+
+    @app.route('/')
+    def health_check():
+        return "Alive"
+
+    def run_web():
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host='0.0.0.0', port=port)
+
+    # Run Flask in a separate thread
+    t = Thread(target=run_web)
+    t.daemon = True
+    t.start()
+
     application.run_polling()
 
 if __name__ == '__main__':
