@@ -222,6 +222,11 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
             
     if today_events:
         await send_events(context, today_events, f"📢 **Today's Economic Events ({target_date})**")
+    else:
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        await context.bot.send_message(chat_id=chat_id, text=f"No economic events scheduled for {target_date}", parse_mode='Markdown')
+
+        
 
 async def weekly_job(context: ContextTypes.DEFAULT_TYPE):
     """Job to run weekly (Monday) to show the week's schedule."""
