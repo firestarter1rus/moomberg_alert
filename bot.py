@@ -323,7 +323,13 @@ def main():
         else:
              await update.message.reply_text("TELEGRAM_CHAT_ID is not set in environment!")
 
+    async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Helper to get the current chat ID."""
+        chat_id = update.effective_chat.id
+        await update.message.reply_text(f"Current Chat ID: `{chat_id}`", parse_mode='Markdown')
+
     application.add_handler(CommandHandler("heartbeat", manual_heartbeat))
+    application.add_handler(CommandHandler("id", get_id))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("check", check_command))
 
