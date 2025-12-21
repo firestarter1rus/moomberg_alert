@@ -240,12 +240,19 @@ async def weekly_job(context: ContextTypes.DEFAULT_TYPE):
 async def heartbeat_job(context: ContextTypes.DEFAULT_TYPE):
     """Job to run every hour to show heartbeat."""
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    logger.info(f"Heartbeat job executing... Chat ID: {chat_id}")
     if not chat_id:
+        logger.error("Heartbeat skipped: TELEGRAM_CHAT_ID not set.")
         return
         
     now = datetime.now()
     time_str = now.strftime("%H:%M %d.%m.%Y")
-    await context.bot.send_message(chat_id=chat_id, text=f"💓 Heartbeat: {time_str}", parse_mode='Markdown')
+    
+    try:
+        await context.bot.send_message(chat_id=chat_id, text=f"💓 Heartbeat: {time_str}", parse_mode='Markdown')
+        logger.info(f"Heartbeat sent to {chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to send heartbeat: {e}")
 
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /check command (manual check)."""
@@ -301,6 +308,22 @@ def main():
     # Yes, usually days=(0,).
     job_queue.run_daily(weekly_job, time=time(hour=8, minute=0, second=0), days=(0,))
 
+    async def manual_heartbeat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await heartbeat_job(context) # Re-use the job logic but context might differ? 
+        # Actually context in job is different from update handler.
+        # Let's just send the message directly to the update chat or the configured chat.
+        # If we use configured chat, we test the ENV var. 
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        now = datetime.now()
+        time_str = now.strftime("%H:%M %d.%m.%Y")
+        if chat_id:
+             await context.bot.send_message(chat_id=chat_id, text=f"💓 Manual Heartbeat: {time_str}", parse_mode='Markdown')
+             if str(chat_id) != str(update.effective_chat.id):
+                 await update.message.reply_text(f"Sent heartbeat to configured chat: {chat_id}")
+        else:
+             await update.message.reply_text("TELEGRAM_CHAT_ID is not set in environment!")
+
+    application.add_handler(CommandHandler("heartbeat", manual_heartbeat))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("check", check_command))
 
