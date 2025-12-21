@@ -237,6 +237,16 @@ async def weekly_job(context: ContextTypes.DEFAULT_TYPE):
     if filtered:
         await send_events(context, filtered, "📅 **Weekly Economic Schedule**")
 
+async def heartbeat_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job to run every hour to show heartbeat."""
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not chat_id:
+        return
+        
+    now = datetime.now()
+    time_str = now.strftime("%H:%M %d.%m.%Y")
+    await context.bot.send_message(chat_id=chat_id, text=f"💓 Heartbeat: {time_str}", parse_mode='Markdown')
+
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /check command (manual check)."""
     await update.message.reply_text("Fetching latest data...")
