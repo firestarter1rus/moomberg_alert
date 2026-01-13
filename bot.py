@@ -29,28 +29,42 @@ def init_bot():
     global BOT_TOKEN, CHAT_ID
     
     BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id_str = os.getenv("TELEGRAM_CHAT_ID")
     
     if not BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN not set")
         raise ValueError("TELEGRAM_BOT_TOKEN is required")
     
-    if not CHAT_ID:
+    if not chat_id_str:
         logger.error("❌ TELEGRAM_CHAT_ID not set")
         raise ValueError("TELEGRAM_CHAT_ID is required")
     
-    logger.info("✅ Bot configuration loaded successfully")
+    # Convert CHAT_ID to integer (can be negative for groups)
+    try:
+        CHAT_ID = int(chat_id_str)
+        logger.info(f"✅ Bot configuration loaded successfully (Chat ID: {CHAT_ID})")
+    except ValueError:
+        logger.error(f"❌ TELEGRAM_CHAT_ID must be a number, got: {chat_id_str}")
+        raise ValueError("TELEGRAM_CHAT_ID must be a valid integer")
 
 def send_message(text):
     """Send message to configured chat using requests."""
     try:
-        url = f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/sendMessage"
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {
             'chat_id': CHAT_ID,
             'text': text,
             'parse_mode': 'Markdown'
         }
+        
+        logger.info(f"Sending message to chat_id: {CHAT_ID}")
         response = requests.post(url, json=payload, timeout=10)
+        
+        # Log response for debugging
+        if response.status_code != 200:
+            logger.error(f"Response status: {response.status_code}")
+            logger.error(f"Response body: {response.text}")
+        
         response.raise_for_status()
         
         logger.info(f"✅ Message sent: {text[:50]}...")
@@ -123,6 +137,31 @@ def send_custom(message):
             return jsonify({"status": "error", "message": "Failed to send"}), 500
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/test-config')
+def test_config():
+    """Test bot configuration."""
+    try:
+        # Test API call to get bot info
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        bot_info = response.json()
+        
+        return jsonify({
+            "status": "success",
+            "bot_username": bot_info.get('result', {}).get('username'),
+            "bot_id": bot_info.get('result', {}).get('id'),
+            "chat_id": CHAT_ID,
+            "chat_id_type": type(CHAT_ID).__name__
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "chat_id": CHAT_ID,
+            "chat_id_type": type(CHAT_ID).__name__
+        }), 500
 
 def run_flask():
     """Run Flask server."""
