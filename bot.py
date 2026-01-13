@@ -1,12 +1,10 @@
 import logging
 import os
-import asyncio
 from datetime import datetime
 
 import requests
 from flask import Flask, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
-from telegram import Bot
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -22,18 +20,18 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app for health checks
 app = Flask(__name__)
 
-# Global bot instance
-bot = None
+# Global variables
+BOT_TOKEN = None
 CHAT_ID = None
 
 def init_bot():
-    """Initialize Telegram bot."""
-    global bot, CHAT_ID
+    """Initialize bot configuration."""
+    global BOT_TOKEN, CHAT_ID
     
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     
-    if not token:
+    if not BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN not set")
         raise ValueError("TELEGRAM_BOT_TOKEN is required")
     
@@ -41,29 +39,27 @@ def init_bot():
         logger.error("❌ TELEGRAM_CHAT_ID not set")
         raise ValueError("TELEGRAM_CHAT_ID is required")
     
-    bot = Bot(token=token)
-    logger.info("✅ Bot initialized successfully")
-
-async def send_message_async(text):
-    """Send message to configured chat (async)."""
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode='Markdown')
-        logger.info(f"✅ Message sent: {text[:50]}...")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Failed to send message: {e}")
-        return False
+    logger.info("✅ Bot configuration loaded successfully")
 
 def send_message(text):
-    """Send message to configured chat (sync wrapper)."""
+    """Send message to configured chat using requests."""
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(send_message_async(text))
-        loop.close()
-        return result
+        url = f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/sendMessage"
+        payload = {
+            'chat_id': CHAT_ID,
+            'text': text,
+            'parse_mode': 'Markdown'
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        
+        logger.info(f"✅ Message sent: {text[:50]}...")
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Failed to send message: {e}")
+        return False
     except Exception as e:
-        logger.error(f"❌ Error in send_message: {e}")
+        logger.error(f"❌ Unexpected error in send_message: {e}")
         return False
 
 def hourly_task():
