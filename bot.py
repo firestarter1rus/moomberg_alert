@@ -188,17 +188,20 @@ def webhook():
         try:
             update = Update.de_json(request.get_json(force=True), telegram_app.bot)
             
-            # Process update in background
+            # Process update asynchronously
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(telegram_app.process_update(update))
+                async def process():
+                    await telegram_app.process_update(update)
+                
+                loop.run_until_complete(process())
             finally:
                 loop.close()
             
             return jsonify({"ok": True})
         except Exception as e:
-            logger.error(f"❌ Webhook error: {e}")
+            logger.error(f"❌ Webhook error: {e}", exc_info=True)
             return jsonify({"ok": False, "error": str(e)}), 500
     
     return jsonify({"ok": False, "error": "Only POST allowed"}), 405
@@ -221,9 +224,12 @@ def set_webhook():
         asyncio.set_event_loop(loop)
         
         async def setup():
-            bot = Bot(token=BOT_TOKEN)
-            await bot.set_webhook(url=WEBHOOK_URL)
-            info = await bot.get_webhook_info()
+            # Make sure app is initialized
+            if not telegram_app._initialized:
+                await telegram_app.initialize()
+            
+            await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
+            info = await telegram_app.bot.get_webhook_info()
             return info
         
         try:
@@ -237,6 +243,7 @@ def set_webhook():
             loop.close()
             
     except Exception as e:
+        logger.error(f"Error setting webhook: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def init_telegram():
@@ -257,11 +264,13 @@ def init_telegram():
     
     logger.info("✅ Command handlers registered")
     
-    # Set webhook
+    # Initialize and set webhook
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         async def setup_webhook():
+            # Initialize the application
+            await telegram_app.initialize()
             await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
             info = await telegram_app.bot.get_webhook_info()
             logger.info(f"✅ Webhook set: {info.url}")
@@ -320,6 +329,34 @@ def initialize_all():
     logger.info("✅ Bot fully initialized")
     logger.info("📡 Webhook mode active")
     logger.info("=" * 60)
+
+def cleanup():
+    """Cleanup resources on shutdown."""
+    global telegram_app, scheduler
+    
+    logger.info("🛑 Shutting down...")
+    
+    if scheduler and scheduler.running:
+        scheduler.shutdown()
+        logger.info("✅ Scheduler stopped")
+    
+    if telegram_app:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            async def shutdown():
+                if telegram_app._initialized:
+                    await telegram_app.shutdown()
+                    logger.info("✅ Telegram app shutdown")
+        
+            loop.run_until_complete(shutdown())
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+        finally:
+            loop.close()
+
+import atexit
+atexit.register(cleanup)
 
 # Initialize when module loads (for Gunicorn)
 try:
