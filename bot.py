@@ -2,10 +2,12 @@ import logging
 import os
 from datetime import datetime
 
-import requests
-from flask import Flask, jsonify
+from flask import Flask, request, jsonify
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
+import asyncio
 
 # Load environment variables
 load_dotenv()
@@ -17,63 +19,52 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app for health checks
+# Initialize Flask app
 app = Flask(__name__)
 
 # Global variables
 BOT_TOKEN = None
 CHAT_ID = None
+WEBHOOK_URL = None
+telegram_app = None
+scheduler = None
 
-def init_bot():
-    """Initialize bot configuration."""
-    global BOT_TOKEN, CHAT_ID
+def init_config():
+    """Initialize configuration."""
+    global BOT_TOKEN, CHAT_ID, WEBHOOK_URL
     
     BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id_str = os.getenv("TELEGRAM_CHAT_ID")
+    render_url = os.getenv("RENDER_EXTERNAL_URL")  # Render sets this automatically
     
     if not BOT_TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN not set")
         raise ValueError("TELEGRAM_BOT_TOKEN is required")
     
     if not chat_id_str:
-        logger.error("❌ TELEGRAM_CHAT_ID not set")
         raise ValueError("TELEGRAM_CHAT_ID is required")
     
-    # Convert CHAT_ID to integer (can be negative for groups)
     try:
         CHAT_ID = int(chat_id_str)
-        logger.info(f"✅ Bot configuration loaded successfully (Chat ID: {CHAT_ID})")
+        logger.info(f"✅ Chat ID configured: {CHAT_ID}")
     except ValueError:
-        logger.error(f"❌ TELEGRAM_CHAT_ID must be a number, got: {chat_id_str}")
-        raise ValueError("TELEGRAM_CHAT_ID must be a valid integer")
+        raise ValueError(f"TELEGRAM_CHAT_ID must be integer, got: {chat_id_str}")
+    
+    # Set webhook URL
+    if render_url:
+        WEBHOOK_URL = f"{render_url}/webhook"
+        logger.info(f"✅ Webhook URL: {WEBHOOK_URL}")
+    else:
+        logger.warning("⚠️ RENDER_EXTERNAL_URL not set, webhook may not work")
 
-def send_message(text):
-    """Send message to configured chat using requests."""
+async def send_telegram_message(text: str):
+    """Send message to configured chat."""
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {
-            'chat_id': CHAT_ID,
-            'text': text,
-            'parse_mode': 'Markdown'
-        }
-        
-        logger.info(f"Sending message to chat_id: {CHAT_ID}")
-        response = requests.post(url, json=payload, timeout=10)
-        
-        # Log response for debugging
-        if response.status_code != 200:
-            logger.error(f"Response status: {response.status_code}")
-            logger.error(f"Response body: {response.text}")
-        
-        response.raise_for_status()
-        
+        bot = Bot(token=BOT_TOKEN)
+        await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode='Markdown')
         logger.info(f"✅ Message sent: {text[:50]}...")
         return True
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Failed to send message: {e}")
-        return False
     except Exception as e:
-        logger.error(f"❌ Unexpected error in send_message: {e}")
+        logger.error(f"❌ Failed to send message: {e}")
         return False
 
 def hourly_task():
@@ -82,140 +73,266 @@ def hourly_task():
     
     now = datetime.now()
     time_str = now.strftime("%H:%M %d.%m.%Y")
-    message = f"💓 *Hourly Update*\n⏰ {time_str}\n\n✅ System is running normally"
+    message = f"💓 *Hourly Update*\n⏰ {time_str}\n\n✅ System is running"
     
-    send_message(message)
+    # Run async function
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(send_telegram_message(message))
+    finally:
+        loop.close()
 
 def startup_task():
-    """Task that runs once on startup."""
+    """Task that runs on startup."""
     logger.info("🚀 Running startup task...")
     
     now = datetime.now()
     time_str = now.strftime("%H:%M %d.%m.%Y")
-    message = f"🤖 *Bot Started*\n⏰ {time_str}\n\n✅ System is online and monitoring"
+    message = f"🤖 *Bot Started*\n⏰ {time_str}\n\n✅ Webhook mode active"
     
-    send_message(message)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(send_telegram_message(message))
+    finally:
+        loop.close()
 
-# Flask routes for health checks
+# Telegram command handlers
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /start command."""
+    user = update.effective_user
+    await update.message.reply_text(
+        f"👋 Hello {user.first_name}!\n\n"
+        f"🤖 Bot is running in webhook mode.\n"
+        f"💬 Your Chat ID: `{update.effective_chat.id}`\n\n"
+        f"Use /help for available commands.",
+        parse_mode='Markdown'
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /help command."""
+    await update.message.reply_text(
+        "📋 *Available Commands:*\n\n"
+        "/start - Start the bot\n"
+        "/help - Show this message\n"
+        "/status - Check bot status\n"
+        "/test - Send test message\n"
+        "/id - Get your chat ID",
+        parse_mode='Markdown'
+    )
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /status command."""
+    now = datetime.now()
+    await update.message.reply_text(
+        f"✅ *Bot Status*\n\n"
+        f"⏰ Time: {now.strftime('%H:%M %d.%m.%Y')}\n"
+        f"📡 Mode: Webhook\n"
+        f"🔄 Scheduler: Active\n"
+        f"💬 Configured Chat: `{CHAT_ID}`",
+        parse_mode='Markdown'
+    )
+
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /test command."""
+    await update.message.reply_text("🧪 Sending test message to configured chat...")
+    
+    now = datetime.now()
+    message = f"🧪 *Test Message*\n⏰ {now.strftime('%H:%M %d.%m.%Y')}"
+    
+    success = await send_telegram_message(message)
+    
+    if success:
+        await update.message.reply_text("✅ Test message sent!")
+    else:
+        await update.message.reply_text("❌ Failed to send test message. Check logs.")
+
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /id command."""
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"📱 *Chat Information:*\n\n"
+        f"🆔 Chat ID: `{chat.id}`\n"
+        f"📋 Type: {chat.type}\n"
+        f"👤 Title: {chat.title if chat.title else 'N/A'}",
+        parse_mode='Markdown'
+    )
+
+# Flask routes
 @app.route('/')
 def home():
-    """Root endpoint for health check."""
+    """Health check endpoint."""
     return jsonify({
         "status": "alive",
         "service": "telegram-bot",
+        "mode": "webhook",
         "timestamp": datetime.now().isoformat()
     })
 
 @app.route('/health')
 def health():
-    """Health check endpoint."""
+    """Detailed health check."""
     return jsonify({
         "status": "healthy",
         "bot": "running",
-        "chat_id": CHAT_ID if CHAT_ID else "not_set",
-        "mode": "scheduler_only"
+        "chat_id": CHAT_ID,
+        "webhook_url": WEBHOOK_URL,
+        "scheduler": "active" if scheduler and scheduler.running else "inactive"
     })
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Webhook endpoint for Telegram updates."""
+    if request.method == "POST":
+        try:
+            update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+            
+            # Process update in background
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(telegram_app.process_update(update))
+            finally:
+                loop.close()
+            
+            return jsonify({"ok": True})
+        except Exception as e:
+            logger.error(f"❌ Webhook error: {e}")
+            return jsonify({"ok": False, "error": str(e)}), 500
+    
+    return jsonify({"ok": False, "error": "Only POST allowed"}), 405
 
 @app.route('/trigger')
 def trigger():
-    """Manual trigger endpoint for testing."""
+    """Manual trigger for hourly task."""
     try:
         hourly_task()
-        return jsonify({"status": "success", "message": "Task triggered manually"})
+        return jsonify({"status": "success", "message": "Hourly task triggered"})
     except Exception as e:
         logger.error(f"Error in /trigger: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/send/<message>')
-def send_custom(message):
-    """Send custom message (for testing)."""
+@app.route('/set-webhook')
+def set_webhook():
+    """Manually set webhook (for debugging)."""
     try:
-        success = send_message(message)
-        if success:
-            return jsonify({"status": "success", "message": f"Sent: {message}"})
-        else:
-            return jsonify({"status": "error", "message": "Failed to send"}), 500
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def setup():
+            bot = Bot(token=BOT_TOKEN)
+            await bot.set_webhook(url=WEBHOOK_URL)
+            info = await bot.get_webhook_info()
+            return info
+        
+        try:
+            info = loop.run_until_complete(setup())
+            return jsonify({
+                "status": "success",
+                "webhook_url": info.url,
+                "pending_update_count": info.pending_update_count
+            })
+        finally:
+            loop.close()
+            
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/test-config')
-def test_config():
-    """Test bot configuration."""
+def init_telegram():
+    """Initialize Telegram bot application."""
+    global telegram_app
+    
+    logger.info("🤖 Initializing Telegram bot...")
+    
+    # Create application
+    telegram_app = Application.builder().token(BOT_TOKEN).build()
+    
+    # Add command handlers
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("help", help_command))
+    telegram_app.add_handler(CommandHandler("status", status_command))
+    telegram_app.add_handler(CommandHandler("test", test_command))
+    telegram_app.add_handler(CommandHandler("id", id_command))
+    
+    logger.info("✅ Command handlers registered")
+    
+    # Set webhook
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        # Test API call to get bot info
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        bot_info = response.json()
+        async def setup_webhook():
+            await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
+            info = await telegram_app.bot.get_webhook_info()
+            logger.info(f"✅ Webhook set: {info.url}")
+            logger.info(f"   Pending updates: {info.pending_update_count}")
         
-        return jsonify({
-            "status": "success",
-            "bot_username": bot_info.get('result', {}).get('username'),
-            "bot_id": bot_info.get('result', {}).get('id'),
-            "chat_id": CHAT_ID,
-            "chat_id_type": type(CHAT_ID).__name__
-        })
+        loop.run_until_complete(setup_webhook())
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-            "chat_id": CHAT_ID,
-            "chat_id_type": type(CHAT_ID).__name__
-        }), 500
-
-def run_flask():
-    """Run Flask server."""
-    port = int(os.environ.get("PORT", 8080))
-    logger.info(f"🌐 Starting Flask server on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-
-def main():
-    """Main function."""
-    logger.info("=" * 60)
-    logger.info("🤖 TELEGRAM SCHEDULER BOT STARTING")
-    logger.info("=" * 60)
+        logger.error(f"❌ Failed to set webhook: {e}")
+    finally:
+        loop.close()
     
-    # Initialize bot
-    try:
-        init_bot()
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize bot: {e}")
-        return
+    return telegram_app
+
+def init_scheduler():
+    """Initialize task scheduler."""
+    global scheduler
     
-    # Initialize scheduler
+    logger.info("⏰ Initializing scheduler...")
+    
     scheduler = BackgroundScheduler()
     
-    # Schedule hourly task
-    # Runs every hour at minute 0 (e.g., 10:00, 11:00, 12:00, etc.)
+    # Schedule hourly task (every hour at :00)
     scheduler.add_job(
         hourly_task,
         trigger='cron',
         minute=0,
         id='hourly_task',
         name='Hourly Telegram Update',
-        misfire_grace_time=300  # Allow 5 min grace period
+        misfire_grace_time=300
     )
     
-    logger.info("✅ Scheduler configured:")
-    logger.info("   - Hourly task: Every hour at :00")
-    
-    # Start scheduler
     scheduler.start()
-    logger.info("✅ Scheduler started successfully")
+    logger.info("✅ Scheduler started - hourly task at :00")
+    
+    return scheduler
+
+def initialize_all():
+    """Initialize all components."""
+    logger.info("=" * 60)
+    logger.info("🚀 TELEGRAM BOT INITIALIZATION")
+    logger.info("=" * 60)
+    
+    # Load config
+    init_config()
+    
+    # Initialize Telegram
+    init_telegram()
+    
+    # Initialize scheduler
+    init_scheduler()
     
     # Run startup task
-    try:
-        startup_task()
-    except Exception as e:
-        logger.error(f"❌ Startup task failed: {e}")
+    startup_task()
     
-    # Start Flask in main thread (required by Render)
     logger.info("=" * 60)
-    logger.info("🚀 Bot fully initialized")
-    logger.info("📡 NO POLLING - Scheduler only mode")
-    logger.info("🌐 Starting Flask server...")
+    logger.info("✅ Bot fully initialized")
+    logger.info("📡 Webhook mode active")
     logger.info("=" * 60)
-    run_flask()
+
+# Initialize when module loads (for Gunicorn)
+try:
+    initialize_all()
+except Exception as e:
+    logger.error(f"❌ Initialization failed: {e}")
+    raise
+
+def main():
+    """Main function for direct execution."""
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"🌐 Starting Flask server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
 
 if __name__ == '__main__':
     main()
